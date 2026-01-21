@@ -224,31 +224,63 @@ cargo test
 ### Test Categories
 
 #### Unit Tests (38 tests)
-Located in `src/account.rs`, `src/csv.rs`, and `src/transaction.rs`:
+Unit tests verify individual components in isolation using direct function calls and assertions.
 
-**Account Tests (28 tests):**
-- Account creation and basic operations
-- Deposit/withdrawal logic
-- Insufficient funds handling
-- Dispute/resolve/chargeback flows
-- **State transition validation** (5 tests)
-- **Transaction ID uniqueness validation** (3 tests)
-- **Multiple chargebacks on locked accounts** (1 test)
-- **Locked account rejection** (1 test)
-- **Ledger state query methods** (3 tests: is_disputed, is_chargedback, nonexistent tx)
-- **Dispute-resolve-dispute cycle** (1 test): Verifies transactions can be re-disputed after resolution
+**Account Tests (28 tests) - `src/account.rs`:**
 
-**CSV Tests (4 tests):**
-- Transaction type parsing
-- Amount validation
-- Error handling for invalid data
-- Whitespace trimming
+*Basic Operations:*
+1. `test_account_creation`: Verifies new accounts start with zero balances and unlocked status
+2. `test_deposit`: Validates deposit increases available and total balances
+3. `test_withdraw`: Tests successful withdrawal reduces balances correctly
+4. `test_withdraw_insufficient_funds`: Ensures withdrawals fail when funds are insufficient
+5. `test_dispute`: Verifies dispute moves funds from available to held
+6. `test_resolve`: Tests resolve moves funds from held back to available
+7. `test_chargeback`: Confirms chargeback reduces total and locks account
 
-**Transaction Tests (6 tests):**
-- Money transaction creation and validation
-- Transaction state queries (is_disputed, is_chargedback)
-- Full state transition testing (Normal → Disputed → Chargedback)
-- Transaction client ID extraction
+*State Transition Tests:*
+8. `test_dispute_resolve_cycle`: Full cycle - deposit → dispute → resolve
+9. `test_dispute_chargeback_cycle`: Full cycle - deposit → dispute → chargeback
+10. `test_resolve_without_dispute`: Ensures resolve fails if transaction not disputed
+11. `test_chargeback_without_dispute`: Ensures chargeback fails if transaction not disputed
+12. `test_duplicate_dispute`: Prevents disputing same transaction twice
+
+*Transaction ID Uniqueness:*
+13. `test_duplicate_transaction_id_deposit`: Two deposits with same ID should fail
+14. `test_duplicate_transaction_id_withdrawal`: Two withdrawals with same ID should fail
+15. `test_duplicate_transaction_id_mixed`: Deposit and withdrawal with same ID should fail
+
+*Locked Account Behavior:*
+16. `test_multiple_chargebacks_after_account_locked`: Verifies multiple chargebacks work after lock
+17. `test_locked_account_rejects_non_chargeback_transactions`: Ensures locked accounts reject new operations
+
+*Ledger State Queries:*
+18. `test_ledger_is_disputed`: Tests Ledger.is_disputed() method accuracy
+19. `test_ledger_is_chargedback`: Tests Ledger.is_chargedback() method accuracy
+20. `test_ledger_is_disputed_and_is_chargedback_for_nonexistent_tx`: Returns false for non-existent transactions
+
+*Advanced Cycles:*
+21. `test_dispute_resolve_dispute_cycle`: Verifies transaction can be re-disputed after resolution
+22. `test_chargedback_transactions_are_marked`: Confirms chargedback transactions are tracked
+23. `test_account_manager`: Tests async AccountManager with multiple clients
+
+**CSV Tests (4 tests) - `src/csv.rs`:**
+1. `test_deposit_transaction`: Parses deposit with amount
+2. `test_withdrawal_transaction`: Parses withdrawal with amount
+3. `test_dispute_transaction`: Parses dispute (no amount required)
+4. `test_chargeback_transaction`: Parses chargeback (no amount required)
+5. `test_resolve_transaction`: Parses resolve (no amount required)
+6. `test_unknown_transaction_type`: Handles invalid transaction types
+7. `test_transaction_type_with_whitespace`: Trims whitespace from types
+8. `test_deposit_missing_amount`: Rejects deposits without amounts
+9. `test_withdrawal_missing_amount`: Rejects withdrawals without amounts
+
+**Transaction Tests (6 tests) - `src/transaction.rs`:**
+1. `test_money_transaction_creation`: Creates valid MoneyTransaction
+2. `test_money_transaction_validation`: Rejects zero/negative amounts
+3. `test_transaction_client_id`: Extracts client ID from all transaction types
+4. `test_is_disputed`: Tests MoneyTransaction.is_disputed() through state changes
+5. `test_is_chargedback`: Tests MoneyTransaction.is_chargedback() through state changes
+6. `test_transaction_state_transitions`: Full state machine validation (Normal → Disputed → Chargedback)
 
 #### Integration Tests (5 tests)
 Located in `tests/integration_test.rs`:
@@ -257,31 +289,49 @@ Located in `tests/integration_test.rs`:
 2. **test_single_client_multiple_transactions**: Multiple operations on single client
 3. **test_empty_csv**: Edge case handling for empty input
 4. **test_dispute_and_resolve**: Tests dispute→resolve flow
-   - Deposits funds, disputes a transaction, then resolves it
-   - Verifies funds move from available→held→available correctly
 5. **test_dispute_and_chargeback**: Tests dispute→chargeback flow
-   - Deposits funds, disputes a transaction, then processes chargeback
-   - Verifies account is locked and funds are permanently removed
+
+**DataFrame Assertion Logic:**
+
+Integration tests use **Polars DataFrames** to compare actual vs expected CSV output:
+
+```rust
+// 1. Run the application and capture stdout
+let output = Command::new("cargo").args(&["run", "--", input_csv]).output()
+
+// 2. Parse both actual and expected CSVs into DataFrames
+let actual_df = CsvReader::from_path(actual_output).finish()
+let expected_df = CsvReader::from_path(expected_csv).finish()
+
+// 3. Sort both by client ID for consistent comparison
+let actual_sorted = actual_df.sort(["client"], false, false)
+let expected_sorted = expected_df.sort(["client"], false, false)
+
+// 4. Assert shape matches (rows × columns)
+assert_eq!(actual_df.shape(), expected_df.shape())
+
+// 5. Assert column names match
+assert_eq!(actual_df.get_column_names(), expected_df.get_column_names())
+
+// 6. Assert each column's values match exactly
+for col_name in columns {
+    assert!(actual_col.equals(expected_col))
+}
+```
+
+This approach provides:
+- **Type-aware comparison**: Respects data types (numbers, booleans, strings)
+- **Decimal precision**: Handles floating-point comparisons correctly
+- **Clear error messages**: Shows exactly which column/value differs
+- **Order independence**: Sorts by client ID before comparison
 
 **Test Structure:**
 ```
 tests/
 ├── input/              # Input CSV files
-│   ├── test_data.csv
-│   ├── single_client.csv
-│   ├── empty.csv
-│   ├── dispute_resolve.csv
-│   └── dispute_chargeback.csv
 ├── expected/           # Expected output CSV files
-│   ├── test_data_expected.csv
-│   ├── single_client_expected.csv
-│   ├── empty_expected.csv
-│   ├── dispute_resolve_expected.csv
-│   └── dispute_chargeback_expected.csv
-└── integration_test.rs
+└── integration_test.rs # DataFrame assertion logic
 ```
-
-Integration tests use **Polars DataFrames** for precise CSV comparison.
 
 ### Run Specific Tests
 ```bash
@@ -414,12 +464,55 @@ The system uses async RwLock for thread-safe account access:
 - `flexi_logger`: Flexible logging
 - `polars`: DataFrame operations (tests only)
 
+## System Behavior
+
+### CSV Parsing
+- **Whitespace normalization**: Leading/trailing spaces trimmed, spaces after commas normalized
+- **Case sensitivity**: Transaction types are case-insensitive
+- **Empty amounts**: Disputes/resolves/chargebacks don't require amounts (ignored if provided)
+- **Invalid rows**: Skipped and logged, processing continues
+- **Streaming**: CSV processed line-by-line (doesn't load entire file into memory)
+
+### Output Generation
+- **Sorting**: Always sorted by client ID (ascending order)
+- **Decimal formatting**: Shows at least 1 decimal place, up to 4 decimal places
+- **Headers**: Always includes CSV header row
+- **Output channels**: Results to stdout, errors/logs to stderr
+
+### Graceful Shutdown
+- **Ctrl-C handling**: Cancels CSV reading, completes in-flight transactions
+- **CancellationToken**: Propagates cancellation through async tasks
+- **Log flushing**: Ensures all logs written before exit
+- **No data loss**: Buffered transactions complete before shutdown
+
+### Transaction Processing Guarantees
+- **Order preservation**: Transactions processed in CSV order per client
+- **Atomicity**: Each transaction is atomic (all-or-nothing)
+- **Isolation**: Client accounts are isolated (no cross-client effects)
+- **Idempotency**: Duplicate transaction IDs rejected to prevent double-processing
+
+### Memory Management
+- **Channel backpressure**: Limits memory usage to 100 queued transactions
+- **Bounded buffer**: Prevents memory exhaustion on large CSV files
+- **Clone on output**: Account state cloned for output (no locks held during I/O)
+
+### Logging Configuration
+- **Log file**: `./session.log` in current directory
+- **Log level**: `info` (warnings and errors included)
+- **Write mode**: `BufferAndFlush` for high performance
+- **Timestamp**: Suppressed in filename for simplicity
+
 ## Error Handling
 
 The application continues processing on errors and logs issues:
 - Invalid transactions are skipped
 - Error details logged to stderr and `session.log`
 - Final account states reflect all successfully processed transactions
+
+**Error Types:**
+- **Invalid rows**: Missing client/tx/amount, wrong format
+- **Business logic**: Insufficient funds, invalid state transitions
+- **Duplicate IDs**: Transaction ID already exists for client
 
 ## License
 
