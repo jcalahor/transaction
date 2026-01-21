@@ -11,6 +11,7 @@ use tokio::sync::RwLock;
 pub struct Ledger {
     transactions: HashMap<u32, Transaction>,
     disputed_txs: HashSet<u32>,
+    chargedback_txs: HashSet<u32>,
 }
 
 impl Ledger {
@@ -18,6 +19,7 @@ impl Ledger {
         Self {
             transactions: HashMap::new(),
             disputed_txs: HashSet::new(),
+            chargedback_txs: HashSet::new(),
         }
     }
 
@@ -46,6 +48,14 @@ impl Ledger {
             return Err("Transaction is not under dispute".to_string());
         }
         Ok(())
+    }
+
+    pub fn mark_chargedback(&mut self, tx_id: u32) {
+        self.chargedback_txs.insert(tx_id);
+    }
+
+    pub fn is_chargedback(&self, tx_id: u32) -> bool {
+        self.chargedback_txs.contains(&tx_id)
     }
 }
 
@@ -159,6 +169,7 @@ impl Account {
                 };
 
                 self.ledger.clear_dispute(client_tx.tx)?;
+                self.ledger.mark_chargedback(client_tx.tx);
                 self.chargeback(amount);
                 Ok(())
             }
@@ -559,5 +570,32 @@ mod tests {
 
         // Balance should remain unchanged
         assert_eq!(account.available, dec!(100.00));
+    }
+
+    #[test]
+    fn test_chargedback_transactions_are_marked() {
+        use crate::transaction::{ClientTransaction, MoneyTransaction, Transaction};
+
+        let mut account = Account::new(1);
+
+        // Add a deposit
+        let deposit = Transaction::Deposit(MoneyTransaction::new(1, 1, dec!(100.00)).unwrap());
+        account.process_transaction(deposit).unwrap();
+        
+        // Transaction should not be chargedback initially
+        assert!(!account.ledger.is_chargedback(1));
+
+        // Dispute the transaction
+        let dispute = Transaction::Dispute(ClientTransaction::new(1, 1));
+        account.process_transaction(dispute).unwrap();
+        assert!(!account.ledger.is_chargedback(1));
+
+        // Chargeback the dispute
+        let chargeback = Transaction::Chargeback(ClientTransaction::new(1, 1));
+        account.process_transaction(chargeback).unwrap();
+        
+        // Transaction should now be marked as chargedback
+        assert!(account.ledger.is_chargedback(1));
+        assert_eq!(account.locked, true);
     }
 }
