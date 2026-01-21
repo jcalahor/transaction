@@ -1,10 +1,6 @@
 use crate::transaction::Transaction;
 use rust_decimal::Decimal;
-use std::{
-    collections::HashMap,
-    error::Error,
-    sync::Arc,
-};
+use std::{collections::HashMap, error::Error, sync::Arc};
 use tokio::sync::RwLock;
 
 #[derive(Debug, Clone)]

@@ -24,6 +24,75 @@ This transaction processing engine reads CSV files containing financial transact
 
 ## Architecture
 
+### Data Flow Architecture
+
+The application uses an asynchronous pipeline with Tokio channels for efficient transaction processing:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         Transaction Processing Pipeline                  │
+└─────────────────────────────────────────────────────────────────────────┘
+
+    CSV Input File
+         │
+         │ (1) Read CSV rows
+         ↓
+  ┌──────────────────┐
+  │  CSV Reader      │  (Async Task 1)
+  │  process_csv_*   │  - Parses CSV rows
+  │                  │  - Validates format
+  └─────────┬────────┘  - Creates Transaction objects
+            │
+            │ (2) Send via Tokio MPSC Channel (capacity: 100)
+            ↓
+    ┌───────────────────┐
+    │   MPSC Channel    │  Buffer: Transaction queue
+    │   (tx → rx)       │  Provides backpressure
+    └────────┬──────────┘
+             │
+             │ (3) Receive transactions one-by-one
+             ↓
+  ┌─────────────────────┐
+  │ Transaction Receiver│  (Async Task 2)
+  │ Loop                │  - Receives from channel
+  │                     │  - Forwards to AccountManager
+  └──────────┬──────────┘
+             │
+             │ (4) Process transaction
+             ↓
+  ┌─────────────────────┐
+  │  AccountManager     │  Thread-safe (Arc<RwLock>)
+  │  process_transaction│  - Locks account
+  └──────────┬──────────┘  - Validates state
+             │             - Updates balances
+             │ (5) Mutate account state
+             ↓
+  ┌─────────────────────┐
+  │   Account + Ledger  │  Per-client state
+  │   - available       │  - Transaction history
+  │   - held            │  - State management
+  │   - total           │  - Balance tracking
+  │   - locked          │
+  └──────────┬──────────┘
+             │
+             │ (6) All transactions processed
+             ↓
+  ┌─────────────────────┐
+  │  Output Generator   │  - Sort by client ID
+  │                     │  - Format as CSV
+  └──────────┬──────────┘  - Write to stdout
+             │
+             ↓
+      CSV Output (stdout)
+```
+
+**Key Benefits:**
+- **Async Processing**: Non-blocking I/O with Tokio
+- **Backpressure**: Channel capacity prevents memory overflow
+- **Concurrency Safety**: RwLock ensures thread-safe account access
+- **Graceful Shutdown**: Ctrl-C handling with CancellationToken
+- **Error Isolation**: Failed transactions don't stop processing
+
 ### Core Structures
 
 #### `Transaction` (src/transaction.rs)
@@ -38,8 +107,31 @@ pub enum Transaction {
 }
 ```
 
-**MoneyTransaction**: Contains client ID, transaction ID, amount, and timestamp
+**MoneyTransaction**: Contains client ID, transaction ID, amount, timestamp, and state
 **ClientTransaction**: Contains only client ID and transaction ID (for disputes/resolves/chargebacks)
+
+#### `TransactionState` (src/transaction.rs)
+Enum tracking the state of each transaction:
+```rust
+pub enum TransactionState {
+    Normal,       // Transaction in normal state
+    Disputed,     // Transaction is under dispute
+    Chargedback,  // Transaction has been charged back
+}
+```
+
+State is encapsulated within each `MoneyTransaction` for better cohesion and self-contained state management.
+
+#### `TransactionError` (src/transaction.rs)
+Type-safe error handling for transaction state operations:
+```rust
+pub enum TransactionError {
+    AlreadyDisputed,      // Cannot dispute an already-disputed transaction
+    NotDisputed,          // Cannot resolve/chargeback a non-disputed transaction
+    AlreadyChargedback,   // Cannot dispute a chargedback transaction
+    InvalidAmount(String),// Amount validation errors (reserved for future use)
+}
+```
 
 #### `Account` (src/account.rs)
 Represents a client account with:
@@ -55,19 +147,21 @@ pub struct Account {
 ```
 
 #### `Ledger` (src/account.rs)
-Transaction ledger with state tracking:
+Transaction ledger storing all transactions:
 ```rust
 pub struct Ledger {
-    transactions: HashMap<u32, Transaction>,  // All transactions
-    disputed_txs: HashSet<u32>,              // Transactions under dispute
+    transactions: HashMap<u32, Transaction>,  // All transactions with their state
 }
 ```
 
 **Key Methods:**
-- `mark_disputed(tx_id)`: Mark transaction as disputed
-- `is_disputed(tx_id)`: Check if transaction is disputed
-- `clear_dispute(tx_id)`: Clear dispute status
 - `get_transaction(tx_id)`: Retrieve transaction by ID
+- `get_transaction_mut(tx_id)`: Get mutable reference to transaction
+- `is_disputed(tx_id)`: Check if transaction is disputed (delegates to transaction state)
+- `is_chargedback(tx_id)`: Check if transaction is chargedback (delegates to transaction state)
+- `add_transaction(tx_id, tx)`: Add new transaction to ledger
+
+State management is delegated to the `MoneyTransaction` itself, eliminating the need for separate tracking HashSets.
 
 #### `AccountManager` (src/account.rs)
 Thread-safe account manager using async RwLock:
@@ -129,26 +223,32 @@ cargo test
 
 ### Test Categories
 
-#### Unit Tests (28 tests)
+#### Unit Tests (38 tests)
 Located in `src/account.rs`, `src/csv.rs`, and `src/transaction.rs`:
 
-**Account Tests:**
+**Account Tests (28 tests):**
 - Account creation and basic operations
 - Deposit/withdrawal logic
 - Insufficient funds handling
 - Dispute/resolve/chargeback flows
 - **State transition validation** (5 tests)
 - **Transaction ID uniqueness validation** (3 tests)
+- **Multiple chargebacks on locked accounts** (1 test)
+- **Locked account rejection** (1 test)
+- **Ledger state query methods** (3 tests: is_disputed, is_chargedback, nonexistent tx)
+- **Dispute-resolve-dispute cycle** (1 test): Verifies transactions can be re-disputed after resolution
 
-**CSV Tests:**
+**CSV Tests (4 tests):**
 - Transaction type parsing
 - Amount validation
 - Error handling for invalid data
 - Whitespace trimming
 
-**Transaction Tests:**
-- Money transaction creation
-- Amount validation (positive, 4 decimal places)
+**Transaction Tests (6 tests):**
+- Money transaction creation and validation
+- Transaction state queries (is_disputed, is_chargedback)
+- Full state transition testing (Normal → Disputed → Chargedback)
+- Transaction client ID extraction
 
 #### Integration Tests (5 tests)
 Located in `tests/integration_test.rs`:
@@ -301,8 +401,9 @@ The system uses async RwLock for thread-safe account access:
 
 - **Buffered Logging**: WriteMode::BufferAndFlush for high throughput
 - **Async I/O**: Non-blocking CSV processing
-- **Efficient State Tracking**: HashSet for O(1) dispute lookups
+- **Efficient State Tracking**: State encapsulated in transactions for O(1) lookups
 - **Decimal Arithmetic**: Precise financial calculations (no floating point)
+- **Type-Safe Errors**: Custom TransactionError enum for better error handling
 
 ## Dependencies
 
