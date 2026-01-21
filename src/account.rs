@@ -10,16 +10,12 @@ use tokio::sync::RwLock;
 #[derive(Debug, Clone)]
 pub struct Ledger {
     transactions: HashMap<u32, Transaction>,
-    disputed_txs: HashSet<u32>,
-    chargedback_txs: HashSet<u32>,
 }
 
 impl Ledger {
     pub fn new() -> Self {
         Self {
             transactions: HashMap::new(),
-            disputed_txs: HashSet::new(),
-            chargedback_txs: HashSet::new(),
         }
     }
 
@@ -31,31 +27,34 @@ impl Ledger {
         self.transactions.get(&tx_id)
     }
 
-    pub fn mark_disputed(&mut self, tx_id: u32) -> Result<(), String> {
-        if self.disputed_txs.contains(&tx_id) {
-            return Err("Transaction is already under dispute".to_string());
-        }
-        self.disputed_txs.insert(tx_id);
-        Ok(())
+    pub fn get_transaction_mut(&mut self, tx_id: u32) -> Option<&mut Transaction> {
+        self.transactions.get_mut(&tx_id)
     }
 
     pub fn is_disputed(&self, tx_id: u32) -> bool {
-        self.disputed_txs.contains(&tx_id)
-    }
-
-    pub fn clear_dispute(&mut self, tx_id: u32) -> Result<(), String> {
-        if !self.disputed_txs.remove(&tx_id) {
-            return Err("Transaction is not under dispute".to_string());
+        if let Some(tx) = self.transactions.get(&tx_id) {
+            match tx {
+                Transaction::Deposit(money_tx) | Transaction::Withdrawal(money_tx) => {
+                    money_tx.is_disputed()
+                }
+                _ => false,
+            }
+        } else {
+            false
         }
-        Ok(())
-    }
-
-    pub fn mark_chargedback(&mut self, tx_id: u32) {
-        self.chargedback_txs.insert(tx_id);
     }
 
     pub fn is_chargedback(&self, tx_id: u32) -> bool {
-        self.chargedback_txs.contains(&tx_id)
+        if let Some(tx) = self.transactions.get(&tx_id) {
+            match tx {
+                Transaction::Deposit(money_tx) | Transaction::Withdrawal(money_tx) => {
+                    money_tx.is_chargedback()
+                }
+                _ => false,
+            }
+        } else {
+            false
+        }
     }
 }
 
@@ -110,10 +109,11 @@ impl Account {
                 Ok(())
             }
             Transaction::Dispute(client_tx) => {
-                // First, get the amount from the transaction
-                let amount = if let Some(disputed_tx) = self.ledger.get_transaction(client_tx.tx) {
-                    match disputed_tx {
+                // Get mutable reference to the transaction and mark it as disputed
+                let amount = if let Some(tx) = self.ledger.get_transaction_mut(client_tx.tx) {
+                    match tx {
                         Transaction::Deposit(money_tx) | Transaction::Withdrawal(money_tx) => {
+                            money_tx.mark_disputed()?;
                             money_tx.amount
                         }
                         _ => return Err("Cannot dispute non-money transaction".into()),
@@ -122,21 +122,15 @@ impl Account {
                     return Err("Transaction not found".into());
                 };
 
-                // Now mark as disputed and update balances
-                self.ledger.mark_disputed(client_tx.tx)?;
                 self.dispute(amount);
                 Ok(())
             }
             Transaction::Resolve(client_tx) => {
-                // Check if transaction is under dispute
-                if !self.ledger.is_disputed(client_tx.tx) {
-                    return Err("Transaction is not under dispute".into());
-                }
-
-                // Get the amount before clearing dispute
-                let amount = if let Some(resolved_tx) = self.ledger.get_transaction(client_tx.tx) {
-                    match resolved_tx {
+                // Get mutable reference to the transaction and resolve it
+                let amount = if let Some(tx) = self.ledger.get_transaction_mut(client_tx.tx) {
+                    match tx {
                         Transaction::Deposit(money_tx) | Transaction::Withdrawal(money_tx) => {
+                            money_tx.resolve_dispute()?;
                             money_tx.amount
                         }
                         _ => return Err("Cannot resolve non-money transaction".into()),
@@ -145,21 +139,15 @@ impl Account {
                     return Err("Transaction not found".into());
                 };
 
-                self.ledger.clear_dispute(client_tx.tx)?;
                 self.resolve(amount);
                 Ok(())
             }
             Transaction::Chargeback(client_tx) => {
-                // Check if transaction is under dispute
-                if !self.ledger.is_disputed(client_tx.tx) {
-                    return Err("Transaction is not under dispute".into());
-                }
-
-                // Get the amount before clearing dispute
-                let amount = if let Some(chargeback_tx) = self.ledger.get_transaction(client_tx.tx)
-                {
-                    match chargeback_tx {
+                // Get mutable reference to the transaction and mark it as chargedback
+                let amount = if let Some(tx) = self.ledger.get_transaction_mut(client_tx.tx) {
+                    match tx {
                         Transaction::Deposit(money_tx) | Transaction::Withdrawal(money_tx) => {
+                            money_tx.mark_chargedback()?;
                             money_tx.amount
                         }
                         _ => return Err("Cannot chargeback non-money transaction".into()),
@@ -168,8 +156,6 @@ impl Account {
                     return Err("Transaction not found".into());
                 };
 
-                self.ledger.clear_dispute(client_tx.tx)?;
-                self.ledger.mark_chargedback(client_tx.tx);
                 self.chargeback(amount);
                 Ok(())
             }

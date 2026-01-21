@@ -13,11 +13,19 @@ impl ClientTransaction {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionState {
+    Normal,
+    Disputed,
+    Chargedback,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct MoneyTransaction {
     pub id: ClientTransaction,
     pub amount: Decimal,
     pub timestamp: DateTime<Utc>,
+    pub state: TransactionState,
 }
 
 impl MoneyTransaction {
@@ -33,7 +41,43 @@ impl MoneyTransaction {
             id: ClientTransaction::new(client, tx),
             amount,
             timestamp: Utc::now(),
+            state: TransactionState::Normal,
         })
+    }
+
+    pub fn is_disputed(&self) -> bool {
+        self.state == TransactionState::Disputed
+    }
+
+    pub fn is_chargedback(&self) -> bool {
+        self.state == TransactionState::Chargedback
+    }
+
+    pub fn mark_disputed(&mut self) -> Result<(), String> {
+        if self.state == TransactionState::Disputed {
+            return Err("Transaction is already under dispute".to_string());
+        }
+        if self.state == TransactionState::Chargedback {
+            return Err("Cannot dispute a chargedback transaction".to_string());
+        }
+        self.state = TransactionState::Disputed;
+        Ok(())
+    }
+
+    pub fn resolve_dispute(&mut self) -> Result<(), String> {
+        if self.state != TransactionState::Disputed {
+            return Err("Transaction is not under dispute".to_string());
+        }
+        self.state = TransactionState::Normal;
+        Ok(())
+    }
+
+    pub fn mark_chargedback(&mut self) -> Result<(), String> {
+        if self.state != TransactionState::Disputed {
+            return Err("Transaction is not under dispute".to_string());
+        }
+        self.state = TransactionState::Chargedback;
+        Ok(())
     }
 }
 
