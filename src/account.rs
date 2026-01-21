@@ -109,6 +109,14 @@ impl Account {
                 Ok(())
             }
             Transaction::Dispute(client_tx) => {
+                // Check if transaction is already disputed or chargedback
+                if self.ledger.is_disputed(client_tx.tx) {
+                    return Err("Transaction is already under dispute".into());
+                }
+                if self.ledger.is_chargedback(client_tx.tx) {
+                    return Err("Cannot dispute a chargedback transaction".into());
+                }
+
                 // Get mutable reference to the transaction and mark it as disputed
                 let amount = if let Some(tx) = self.ledger.get_transaction_mut(client_tx.tx) {
                     match tx {
@@ -126,6 +134,11 @@ impl Account {
                 Ok(())
             }
             Transaction::Resolve(client_tx) => {
+                // Check if transaction is actually disputed
+                if !self.ledger.is_disputed(client_tx.tx) {
+                    return Err("Transaction is not under dispute".into());
+                }
+
                 // Get mutable reference to the transaction and resolve it
                 let amount = if let Some(tx) = self.ledger.get_transaction_mut(client_tx.tx) {
                     match tx {
@@ -143,6 +156,11 @@ impl Account {
                 Ok(())
             }
             Transaction::Chargeback(client_tx) => {
+                // Check if transaction is actually disputed
+                if !self.ledger.is_disputed(client_tx.tx) {
+                    return Err("Transaction is not under dispute".into());
+                }
+
                 // Get mutable reference to the transaction and mark it as chargedback
                 let amount = if let Some(tx) = self.ledger.get_transaction_mut(client_tx.tx) {
                     match tx {
