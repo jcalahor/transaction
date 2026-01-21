@@ -583,4 +583,102 @@ mod tests {
         assert!(account.ledger.is_chargedback(1));
         assert_eq!(account.locked, true);
     }
+
+    #[test]
+    fn test_multiple_chargebacks_after_account_locked() {
+        use crate::transaction::{ClientTransaction, MoneyTransaction, Transaction};
+
+        let mut account = Account::new(1);
+
+        // Add multiple deposits
+        let deposit1 = Transaction::Deposit(MoneyTransaction::new(1, 1, dec!(100.00)).unwrap());
+        account.process_transaction(deposit1).unwrap();
+        
+        let deposit2 = Transaction::Deposit(MoneyTransaction::new(1, 2, dec!(50.00)).unwrap());
+        account.process_transaction(deposit2).unwrap();
+        
+        let deposit3 = Transaction::Deposit(MoneyTransaction::new(1, 3, dec!(75.00)).unwrap());
+        account.process_transaction(deposit3).unwrap();
+        
+        assert_eq!(account.available, dec!(225.00));
+        assert_eq!(account.total, dec!(225.00));
+
+        // Dispute all three transactions
+        let dispute1 = Transaction::Dispute(ClientTransaction::new(1, 1));
+        account.process_transaction(dispute1).unwrap();
+        
+        let dispute2 = Transaction::Dispute(ClientTransaction::new(1, 2));
+        account.process_transaction(dispute2).unwrap();
+        
+        let dispute3 = Transaction::Dispute(ClientTransaction::new(1, 3));
+        account.process_transaction(dispute3).unwrap();
+        
+        assert_eq!(account.available, dec!(0.00));
+        assert_eq!(account.held, dec!(225.00));
+        assert_eq!(account.total, dec!(225.00));
+        assert_eq!(account.locked, false);
+
+        // First chargeback - locks the account
+        let chargeback1 = Transaction::Chargeback(ClientTransaction::new(1, 1));
+        account.process_transaction(chargeback1).unwrap();
+        
+        assert_eq!(account.available, dec!(0.00));
+        assert_eq!(account.held, dec!(125.00)); // 225 - 100
+        assert_eq!(account.total, dec!(125.00)); // 225 - 100
+        assert_eq!(account.locked, true);
+        assert!(account.ledger.is_chargedback(1));
+
+        // Second chargeback - should still work even though account is locked
+        let chargeback2 = Transaction::Chargeback(ClientTransaction::new(1, 2));
+        let result2 = account.process_transaction(chargeback2);
+        assert!(result2.is_ok(), "Second chargeback should succeed on locked account");
+        
+        assert_eq!(account.available, dec!(0.00));
+        assert_eq!(account.held, dec!(75.00)); // 125 - 50
+        assert_eq!(account.total, dec!(75.00)); // 125 - 50
+        assert_eq!(account.locked, true);
+        assert!(account.ledger.is_chargedback(2));
+
+        // Third chargeback - should also work
+        let chargeback3 = Transaction::Chargeback(ClientTransaction::new(1, 3));
+        let result3 = account.process_transaction(chargeback3);
+        assert!(result3.is_ok(), "Third chargeback should succeed on locked account");
+        
+        assert_eq!(account.available, dec!(0.00));
+        assert_eq!(account.held, dec!(0.00)); // 75 - 75
+        assert_eq!(account.total, dec!(0.00)); // 75 - 75
+        assert_eq!(account.locked, true);
+        assert!(account.ledger.is_chargedback(3));
+    }
+
+    #[test]
+    fn test_locked_account_rejects_non_chargeback_transactions() {
+        use crate::transaction::{ClientTransaction, MoneyTransaction, Transaction};
+
+        let mut account = Account::new(1);
+
+        // Setup: Create and chargeback a transaction to lock the account
+        let deposit1 = Transaction::Deposit(MoneyTransaction::new(1, 1, dec!(100.00)).unwrap());
+        account.process_transaction(deposit1).unwrap();
+        
+        let dispute1 = Transaction::Dispute(ClientTransaction::new(1, 1));
+        account.process_transaction(dispute1).unwrap();
+        
+        let chargeback1 = Transaction::Chargeback(ClientTransaction::new(1, 1));
+        account.process_transaction(chargeback1).unwrap();
+        
+        assert_eq!(account.locked, true);
+
+        // Try to process a new deposit - should fail
+        let deposit2 = Transaction::Deposit(MoneyTransaction::new(1, 2, dec!(50.00)).unwrap());
+        let result = account.process_transaction(deposit2);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "Account is locked");
+
+        // Try to process a withdrawal - should fail
+        let withdrawal = Transaction::Withdrawal(MoneyTransaction::new(1, 3, dec!(10.00)).unwrap());
+        let result = account.process_transaction(withdrawal);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "Account is locked");
+    }
 }
