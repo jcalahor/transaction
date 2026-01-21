@@ -699,4 +699,61 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "Account is locked");
     }
+
+    #[test]
+    fn test_ledger_is_disputed() {
+        use crate::transaction::{ClientTransaction, MoneyTransaction, Transaction};
+
+        let mut account = Account::new(1);
+
+        // Add a deposit
+        let deposit = Transaction::Deposit(MoneyTransaction::new(1, 1, dec!(100.00)).unwrap());
+        account.process_transaction(deposit).unwrap();
+        
+        // Initially should not be disputed
+        assert!(!account.ledger.is_disputed(1));
+        
+        // After disputing, should return true
+        let dispute = Transaction::Dispute(ClientTransaction::new(1, 1));
+        account.process_transaction(dispute).unwrap();
+        assert!(account.ledger.is_disputed(1));
+        
+        // After resolving, should not be disputed
+        let resolve = Transaction::Resolve(ClientTransaction::new(1, 1));
+        account.process_transaction(resolve).unwrap();
+        assert!(!account.ledger.is_disputed(1));
+    }
+
+    #[test]
+    fn test_ledger_is_chargedback() {
+        use crate::transaction::{ClientTransaction, MoneyTransaction, Transaction};
+
+        let mut account = Account::new(1);
+
+        // Add a deposit
+        let deposit = Transaction::Deposit(MoneyTransaction::new(1, 1, dec!(100.00)).unwrap());
+        account.process_transaction(deposit).unwrap();
+        
+        // Initially should not be chargedback
+        assert!(!account.ledger.is_chargedback(1));
+        
+        // Dispute the transaction
+        let dispute = Transaction::Dispute(ClientTransaction::new(1, 1));
+        account.process_transaction(dispute).unwrap();
+        assert!(!account.ledger.is_chargedback(1));
+        
+        // After chargeback, should return true
+        let chargeback = Transaction::Chargeback(ClientTransaction::new(1, 1));
+        account.process_transaction(chargeback).unwrap();
+        assert!(account.ledger.is_chargedback(1));
+    }
+
+    #[test]
+    fn test_ledger_is_disputed_and_is_chargedback_for_nonexistent_tx() {
+        let account = Account::new(1);
+        
+        // For a non-existent transaction, both should return false
+        assert!(!account.ledger.is_disputed(999));
+        assert!(!account.ledger.is_chargedback(999));
+    }
 }
