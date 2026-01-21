@@ -1,5 +1,29 @@
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
+use std::fmt;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransactionError {
+    AlreadyDisputed,
+    NotDisputed,
+    AlreadyChargedback,
+    InvalidAmount(String),
+}
+
+impl fmt::Display for TransactionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TransactionError::AlreadyDisputed => write!(f, "Transaction is already under dispute"),
+            TransactionError::NotDisputed => write!(f, "Transaction is not under dispute"),
+            TransactionError::AlreadyChargedback => {
+                write!(f, "Cannot dispute a chargedback transaction")
+            }
+            TransactionError::InvalidAmount(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
+impl std::error::Error for TransactionError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ClientTransaction {
@@ -53,28 +77,28 @@ impl MoneyTransaction {
         self.state == TransactionState::Chargedback
     }
 
-    pub fn mark_disputed(&mut self) -> Result<(), String> {
+    pub fn mark_disputed(&mut self) -> Result<(), TransactionError> {
         if self.state == TransactionState::Disputed {
-            return Err("Transaction is already under dispute".to_string());
+            return Err(TransactionError::AlreadyDisputed);
         }
         if self.state == TransactionState::Chargedback {
-            return Err("Cannot dispute a chargedback transaction".to_string());
+            return Err(TransactionError::AlreadyChargedback);
         }
         self.state = TransactionState::Disputed;
         Ok(())
     }
 
-    pub fn resolve_dispute(&mut self) -> Result<(), String> {
+    pub fn resolve_dispute(&mut self) -> Result<(), TransactionError> {
         if self.state != TransactionState::Disputed {
-            return Err("Transaction is not under dispute".to_string());
+            return Err(TransactionError::NotDisputed);
         }
         self.state = TransactionState::Normal;
         Ok(())
     }
 
-    pub fn mark_chargedback(&mut self) -> Result<(), String> {
+    pub fn mark_chargedback(&mut self) -> Result<(), TransactionError> {
         if self.state != TransactionState::Disputed {
-            return Err("Transaction is not under dispute".to_string());
+            return Err(TransactionError::NotDisputed);
         }
         self.state = TransactionState::Chargedback;
         Ok(())
