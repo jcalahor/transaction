@@ -1,7 +1,7 @@
 use crate::transaction::Transaction;
 use rust_decimal::Decimal;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     error::Error,
     sync::Arc,
 };
@@ -585,7 +585,7 @@ mod tests {
         // Add a deposit
         let deposit = Transaction::Deposit(MoneyTransaction::new(1, 1, dec!(100.00)).unwrap());
         account.process_transaction(deposit).unwrap();
-        
+
         // Transaction should not be chargedback initially
         assert!(!account.ledger.is_chargedback(1));
 
@@ -596,7 +596,7 @@ mod tests {
 
         let chargeback = Transaction::Chargeback(ClientTransaction::new(1, 1));
         account.process_transaction(chargeback).unwrap();
-        
+
         // Transaction should now be marked as chargedback
         assert!(account.ledger.is_chargedback(1));
         assert_eq!(account.locked, true);
@@ -611,26 +611,26 @@ mod tests {
         // Add multiple deposits
         let deposit1 = Transaction::Deposit(MoneyTransaction::new(1, 1, dec!(100.00)).unwrap());
         account.process_transaction(deposit1).unwrap();
-        
+
         let deposit2 = Transaction::Deposit(MoneyTransaction::new(1, 2, dec!(50.00)).unwrap());
         account.process_transaction(deposit2).unwrap();
-        
+
         let deposit3 = Transaction::Deposit(MoneyTransaction::new(1, 3, dec!(75.00)).unwrap());
         account.process_transaction(deposit3).unwrap();
-        
+
         assert_eq!(account.available, dec!(225.00));
         assert_eq!(account.total, dec!(225.00));
 
         // Dispute all three transactions
         let dispute1 = Transaction::Dispute(ClientTransaction::new(1, 1));
         account.process_transaction(dispute1).unwrap();
-        
+
         let dispute2 = Transaction::Dispute(ClientTransaction::new(1, 2));
         account.process_transaction(dispute2).unwrap();
-        
+
         let dispute3 = Transaction::Dispute(ClientTransaction::new(1, 3));
         account.process_transaction(dispute3).unwrap();
-        
+
         assert_eq!(account.available, dec!(0.00));
         assert_eq!(account.held, dec!(225.00));
         assert_eq!(account.total, dec!(225.00));
@@ -639,7 +639,7 @@ mod tests {
         // First chargeback - locks the account
         let chargeback1 = Transaction::Chargeback(ClientTransaction::new(1, 1));
         account.process_transaction(chargeback1).unwrap();
-        
+
         assert_eq!(account.available, dec!(0.00));
         assert_eq!(account.held, dec!(125.00)); // 225 - 100
         assert_eq!(account.total, dec!(125.00)); // 225 - 100
@@ -649,8 +649,11 @@ mod tests {
         // Second chargeback - should still work even though account is locked
         let chargeback2 = Transaction::Chargeback(ClientTransaction::new(1, 2));
         let result2 = account.process_transaction(chargeback2);
-        assert!(result2.is_ok(), "Second chargeback should succeed on locked account");
-        
+        assert!(
+            result2.is_ok(),
+            "Second chargeback should succeed on locked account"
+        );
+
         assert_eq!(account.available, dec!(0.00));
         assert_eq!(account.held, dec!(75.00)); // 125 - 50
         assert_eq!(account.total, dec!(75.00)); // 125 - 50
@@ -660,8 +663,11 @@ mod tests {
         // Third chargeback - should also work
         let chargeback3 = Transaction::Chargeback(ClientTransaction::new(1, 3));
         let result3 = account.process_transaction(chargeback3);
-        assert!(result3.is_ok(), "Third chargeback should succeed on locked account");
-        
+        assert!(
+            result3.is_ok(),
+            "Third chargeback should succeed on locked account"
+        );
+
         assert_eq!(account.available, dec!(0.00));
         assert_eq!(account.held, dec!(0.00)); // 75 - 75
         assert_eq!(account.total, dec!(0.00)); // 75 - 75
@@ -678,13 +684,13 @@ mod tests {
         // Setup: Create and chargeback a transaction to lock the account
         let deposit1 = Transaction::Deposit(MoneyTransaction::new(1, 1, dec!(100.00)).unwrap());
         account.process_transaction(deposit1).unwrap();
-        
+
         let dispute1 = Transaction::Dispute(ClientTransaction::new(1, 1));
         account.process_transaction(dispute1).unwrap();
-        
+
         let chargeback1 = Transaction::Chargeback(ClientTransaction::new(1, 1));
         account.process_transaction(chargeback1).unwrap();
-        
+
         assert_eq!(account.locked, true);
 
         // Try to process a new deposit - should fail
@@ -709,15 +715,15 @@ mod tests {
         // Add a deposit
         let deposit = Transaction::Deposit(MoneyTransaction::new(1, 1, dec!(100.00)).unwrap());
         account.process_transaction(deposit).unwrap();
-        
+
         // Initially should not be disputed
         assert!(!account.ledger.is_disputed(1));
-        
+
         // After disputing, should return true
         let dispute = Transaction::Dispute(ClientTransaction::new(1, 1));
         account.process_transaction(dispute).unwrap();
         assert!(account.ledger.is_disputed(1));
-        
+
         // After resolving, should not be disputed
         let resolve = Transaction::Resolve(ClientTransaction::new(1, 1));
         account.process_transaction(resolve).unwrap();
@@ -733,15 +739,15 @@ mod tests {
         // Add a deposit
         let deposit = Transaction::Deposit(MoneyTransaction::new(1, 1, dec!(100.00)).unwrap());
         account.process_transaction(deposit).unwrap();
-        
+
         // Initially should not be chargedback
         assert!(!account.ledger.is_chargedback(1));
-        
+
         // Dispute the transaction
         let dispute = Transaction::Dispute(ClientTransaction::new(1, 1));
         account.process_transaction(dispute).unwrap();
         assert!(!account.ledger.is_chargedback(1));
-        
+
         // After chargeback, should return true
         let chargeback = Transaction::Chargeback(ClientTransaction::new(1, 1));
         account.process_transaction(chargeback).unwrap();
@@ -751,9 +757,48 @@ mod tests {
     #[test]
     fn test_ledger_is_disputed_and_is_chargedback_for_nonexistent_tx() {
         let account = Account::new(1);
-        
+
         // For a non-existent transaction, both should return false
         assert!(!account.ledger.is_disputed(999));
         assert!(!account.ledger.is_chargedback(999));
+    }
+
+    #[test]
+    fn test_dispute_resolve_dispute_cycle() {
+        use crate::transaction::{ClientTransaction, MoneyTransaction, Transaction};
+
+        let mut account = Account::new(1);
+
+        // Add a deposit
+        let deposit = Transaction::Deposit(MoneyTransaction::new(1, 1, dec!(100.00)).unwrap());
+        account.process_transaction(deposit).unwrap();
+        assert_eq!(account.available, dec!(100.00));
+        assert_eq!(account.held, dec!(0.00));
+
+        // First dispute
+        let dispute1 = Transaction::Dispute(ClientTransaction::new(1, 1));
+        account.process_transaction(dispute1).unwrap();
+        assert_eq!(account.available, dec!(0.00));
+        assert_eq!(account.held, dec!(100.00));
+        assert!(account.ledger.is_disputed(1));
+
+        // Resolve the dispute
+        let resolve = Transaction::Resolve(ClientTransaction::new(1, 1));
+        account.process_transaction(resolve).unwrap();
+        assert_eq!(account.available, dec!(100.00));
+        assert_eq!(account.held, dec!(0.00));
+        assert!(!account.ledger.is_disputed(1));
+
+        // Dispute again - should be allowed after resolution
+        let dispute2 = Transaction::Dispute(ClientTransaction::new(1, 1));
+        let result = account.process_transaction(dispute2);
+        assert!(
+            result.is_ok(),
+            "Should be able to dispute again after resolving"
+        );
+
+        assert_eq!(account.available, dec!(0.00));
+        assert_eq!(account.held, dec!(100.00));
+        assert!(account.ledger.is_disputed(1));
     }
 }

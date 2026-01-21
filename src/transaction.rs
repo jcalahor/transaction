@@ -7,6 +7,7 @@ pub enum TransactionError {
     AlreadyDisputed,
     NotDisputed,
     AlreadyChargedback,
+    #[allow(dead_code)]
     InvalidAmount(String),
 }
 
@@ -172,14 +173,14 @@ mod tests {
     #[test]
     fn test_is_disputed() {
         let mut tx = MoneyTransaction::new(1, 100, dec!(50.00)).unwrap();
-        
+
         // Initially should not be disputed
         assert!(!tx.is_disputed());
-        
+
         // After marking as disputed, should return true
         tx.mark_disputed().unwrap();
         assert!(tx.is_disputed());
-        
+
         // After resolving, should not be disputed
         tx.resolve_dispute().unwrap();
         assert!(!tx.is_disputed());
@@ -188,14 +189,14 @@ mod tests {
     #[test]
     fn test_is_chargedback() {
         let mut tx = MoneyTransaction::new(1, 100, dec!(50.00)).unwrap();
-        
+
         // Initially should not be chargedback
         assert!(!tx.is_chargedback());
-        
+
         // Dispute first (required before chargeback)
         tx.mark_disputed().unwrap();
         assert!(!tx.is_chargedback());
-        
+
         // After marking as chargedback, should return true
         tx.mark_chargedback().unwrap();
         assert!(tx.is_chargedback());
@@ -204,24 +205,24 @@ mod tests {
     #[test]
     fn test_transaction_state_transitions() {
         let mut tx = MoneyTransaction::new(1, 100, dec!(50.00)).unwrap();
-        
+
         // Start in Normal state
         assert!(!tx.is_disputed());
         assert!(!tx.is_chargedback());
-        
+
         // Transition to Disputed
         assert!(tx.mark_disputed().is_ok());
         assert!(tx.is_disputed());
         assert!(!tx.is_chargedback());
-        
+
         // Cannot dispute again
         assert!(tx.mark_disputed().is_err());
-        
+
         // Transition to Chargedback
         assert!(tx.mark_chargedback().is_ok());
         assert!(!tx.is_disputed());
         assert!(tx.is_chargedback());
-        
+
         // Cannot dispute a chargedback transaction
         assert!(tx.mark_disputed().is_err());
     }
