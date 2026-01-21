@@ -590,7 +590,6 @@ mod tests {
         account.process_transaction(dispute).unwrap();
         assert!(!account.ledger.is_chargedback(1));
 
-        // Chargeback the dispute
         let chargeback = Transaction::Chargeback(ClientTransaction::new(1, 1));
         account.process_transaction(chargeback).unwrap();
         
